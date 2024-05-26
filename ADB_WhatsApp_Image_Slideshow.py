@@ -7,7 +7,6 @@ from PIL import Image, ImageTk, ImageOps
 import tkinter as tk
 from threading import Thread
 from screeninfo import get_monitors
-import ctypes
 
 def run_adb_command(command):
     """Run an ADB command and return the output."""
@@ -27,14 +26,12 @@ def list_files_on_device(directory):
     """List files in a directory on the Android device."""
     command = ["adb", "shell", "ls", directory]
     output = run_adb_command(command)
-    #print(output)
     return output.splitlines()
 
 def pull_file_from_device(device_path, local_path):
     """Pull a file from the Android device to the local machine."""
     command = "adb " + "pull " + device_path + " " + local_path
     output = run_adb_command(command)
-    #print(output)
 
 def monitor_directory(directory_to_list, local_directory, interval=60):
     """Monitor the specified directory on the device and pull new files if they don't already exist locally."""
@@ -71,14 +68,22 @@ class SlideshowApp:
         self.image_files = []
         self.image_index = 0
         self.image_queue = []
+        self.photo=""
         self.fullscreen = False
         self.new_image_flag = False
-        self.label = tk.Label(root, bg='black')
-        self.label.pack(fill=tk.BOTH, expand=tk.YES)
+
+        # Create a frame for the image
+        self.image_frame = tk.Frame(root, bg='black')
+        self.image_frame.pack(fill=tk.BOTH, expand=tk.YES)
+
+        # Create a label for the image
+        self.image_label = tk.Label(self.image_frame, bg='black', fg='#fff', text='Starting Slideshow', font=('Arial bold',60), compound=tk.BOTTOM)
+        self.image_label.pack(fill=tk.BOTH, expand=tk.YES, side="left")
+
         self.update_images_list()
         self.root.after(1000, self.display_next_image)  # Start displaying after 1 second to ensure window is rendered
 
-         # Bind the F11 key to toggle full screen
+        # Bind the F11 key to toggle full screen
         self.root.bind('<F11>', self.toggle_fullscreen)
 
         # Bind the ESC key to exit fullscreen
@@ -130,39 +135,74 @@ class SlideshowApp:
             image_path = self.image_queue.pop(0)
             print("Displaying next image in queue:", image_path, "Images remaining:", len(self.image_queue))
         else:
-            if(self.image_index==0):
-                print("Restarting slideshow. Shuffeling image list.")
+            if not self.image_files:
                 self.update_images_list()
-            
-            
-            self.image_index = self.image_index % len(self.image_files)
-            image_path = self.image_files[self.image_index]
-            print("Queue empty. Displaying image #", self.image_index, image_path)
-            self.image_index = (self.image_index + 1) % len(self.image_files)
+            if not self.image_files:
+                print("No images found in the image_files list.")
+                image_path = None
+            else:
+                while True:
+                    if not self.image_files:
+                        print("No images left in the image_files list.")
+                        image_path = None
+                        break  # Exit the loop if there are no images left
 
-        image = Image.open(image_path)
-        resized_image = self.resize_image(image)
-        photo = ImageTk.PhotoImage(resized_image)
-        self.label.config(image=photo)
-        self.label.image = photo
+                    if self.image_index == 0:
+                        print("Restarting slideshow. Shuffling image list.")
+                        self.update_images_list()
+                        
+                    if self.image_files:
+                        self.image_index = self.image_index % len(self.image_files)
+                        image_path = self.image_files[self.image_index]
+                        print("Queue empty. Displaying image #", self.image_index, image_path)
 
-        self.root.after(self.interval, self.display_next_image)
+                        try:
+                            image = Image.open(image_path)
+                            break  # Successfully loaded the image, exit the loop
+                        except (FileNotFoundError, OSError) as e:
+                            print(f"Error loading image {image_path}: {e}. Removing from list.")
+                            del self.image_files[self.image_index]
+
+                if self.image_files:
+                    self.image_index = (self.image_index + 1) % len(self.image_files)
+        try:
+            if image_path:
+                image = Image.open(image_path)
+                resized_image = self.resize_image(image)
+                self.photo = ImageTk.PhotoImage(resized_image)
+                
+        except (FileNotFoundError, OSError) as e:
+            print(f"Error loading image {image_path}: {e}.")
+            image_path = None
+
+        dots = '.' * len(self.image_queue)
+        self.image_label.config(image=self.photo, text=dots, font=('Arial bold', 60))
+        self.image_label.image = self.photo
+        
+        # Determine the interval
+        next_interval = self.interval if image_path else min(1000, self.interval)  # Reduce to 1 second if no images
+
+        self.root.after(next_interval, self.display_next_image)
 
     def add_image_to_slideshow(self, *image_paths):
         self.image_queue.extend(image_paths)
 
         if not self.image_queue:
             # If the queue was empty, shuffle the list of images
-            print("Shuffeling image list")
+            print("Shuffling image list")
             random.shuffle(self.image_files)
+        
+        dots = '.' * len(self.image_queue)
+        self.image_label.config(image=self.photo, text=dots, font=('Arial bold',60))
+        self.image_label.image = self.photo
 
     def set_fullscreen_on_current_screen(self):
         # Get the current screen's geometry
         current_screen = self.get_current_screen()
-        print("current screen: ", current_screen)
+        print("Current screen:", current_screen)
         screen_width = current_screen.width
         screen_height = current_screen.height
-        print("geometry: ", f"{screen_width}x{screen_height}+{current_screen.x}+{current_screen.y}")
+        print("Geometry:", f"{screen_width}x{screen_height}+{current_screen.x}+{current_screen.y}")
         self.root.overrideredirect(True)
         # Set the window size to match the screen size
         self.root.geometry(f"{screen_width}x{screen_height}")
@@ -191,14 +231,11 @@ class SlideshowApp:
         return x, y, width, height
 
     def toggle_fullscreen(self, event=None):
-        
-        #self.root.geometry("320x240+100+100")
-
         if self.fullscreen:
             self.root.attributes('-fullscreen', False)
             self.root.wm_attributes("-topmost", False)
             self.root.overrideredirect(False)
-            root.geometry("800x600")
+            self.root.geometry("800x600")
             self.fullscreen = False
         else:
             # Get the screen on which the window is currently displayed
@@ -206,12 +243,12 @@ class SlideshowApp:
             self.fullscreen = True
         return "break"
 
-
 # Configuration
-device_dir="/sdcard/whatsapp business/media/whatsapp business images"
+device_dir = "/sdcard/whatsapp business/media/whatsapp business images"
 directory_to_list = "\"/sdcard/whatsapp business/media/whatsapp business images\""
 local_directory = ".\\whatsapp_images"  # Local directory to save the files
 interval = 2  # Check interval in seconds
+slideshow_interval_seconds = 30
 
 # Ensure the local directory exists
 if not os.path.exists(local_directory):
@@ -224,7 +261,6 @@ monitor_thread.start()
 
 # Start the slideshow
 root = tk.Tk()
-root.geometry("800x600")  # Set initial window size
-root.configure(bg='black')
-app = SlideshowApp(root, local_directory)
+root.geometry("800x600")  # Set the initial window size
+app = SlideshowApp(root, local_directory, slideshow_interval_seconds*1000)
 root.mainloop()
